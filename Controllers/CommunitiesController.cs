@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -23,10 +24,67 @@ namespace Reddit.Controllers
         }
 
         // GET: api/Communities
-        [HttpGet]
-        public async Task<ActionResult<IEnumerable<Community>>> GetCommunities()
+        [HttpGet] 
+        public async Task<ActionResult<IEnumerable<Community>>> GetCommunities(int pageNumber = 1, int pageSize = 10, string? sortKey = "id",
+             bool? isAscending = true, string? searchKey = null) 
+        { 
+            try 
+            {
+            // Start with base query
+            IQueryable<Community> query = _context.Communities
+                .Include(c => c.Posts)
+                .Include(c => c.Subscribers);
+
+            // Apply search filter if searchKey is provided
+            if (!string.IsNullOrWhiteSpace(searchKey)) 
+            {
+                query = query.Where(c => 
+                    c.Name.Contains(searchKey) || 
+                    c.Description.Contains(searchKey));
+            }
+            
+            query = ApplySorting(query, sortKey, isAscending);
+            
+            var totalItems = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+            
+            if (pageNumber < 1) pageNumber = 1;
+            if (pageNumber > totalPages) pageNumber = totalPages;
+
+            var items = await query
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+            
+            Response.Headers.Add("X-Total-Count", totalItems.ToString());
+            Response.Headers.Add("X-Total-Pages", totalPages.ToString());
+            Response.Headers.Add("X-Current-Page", pageNumber.ToString()); 
+            
+            return Ok(items); 
+            }
+            
+            catch (Exception ex) 
+            {
+            return StatusCode(500, $"Internal server error: {ex.Message}"); 
+            } 
+        }
+
+   
+        private IQueryable<Community> ApplySorting(IQueryable<Community> query, string? sortKey, bool? isAscending)
         {
-            return await _context.Communities.ToListAsync();
+        var ascending = isAscending ?? true;
+
+        Expression<Func<Community, object>> keySelector = sortKey?.ToLower() switch
+        {
+            "createdat" => c => c.CreatedAt,
+            "postscount" => c => c.Posts.Count,
+            "subscriberscount" => c => c.Subscribers.Count,
+            "id" or _ => c => c.Id
+        };
+
+        return ascending 
+            ? query.OrderBy(keySelector)
+            : query.OrderByDescending(keySelector); 
         }
 
         // GET: api/Communities/5
